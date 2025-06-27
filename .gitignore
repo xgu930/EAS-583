@@ -1,0 +1,10 @@
+# Byte-code caches
+__pycache__/
+*.py[cod]
+
+# OS files
+.DS_Store
+
+# Virtual-envs (uncomment if you keep venv inside repo)
+# venv/
+

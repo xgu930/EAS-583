@@ -16,6 +16,7 @@ contract Destination is AccessControl {
 	event Wrap( address indexed underlying_token, address indexed wrapped_token, address indexed to, uint256 amount );
 	event Unwrap( address indexed underlying_token, address indexed wrapped_token, address frm, address indexed to, uint256 amount );
 
+    error UnregisteredToken();
     constructor( address admin ) {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(CREATOR_ROLE, admin);
@@ -25,10 +26,10 @@ contract Destination is AccessControl {
 	function wrap(address _underlying_token, address _recipient, uint256 _amount ) public onlyRole(WARDEN_ROLE) {
 		//YOUR CODE HERE
 		require(_recipient != address(0), "Destination: zero recipient");
-        require(_amount     > 0,          "Destination: zero amount");
+        require(_amount     != 0,          "Destination: zero amount");
 
         address wrapped = underlying_tokens[_underlying_token];
-        require(wrapped != address(0),    "Destination: underlying not registered");
+        if (wrapped == address(0)) revert UnregisteredToken();
 
         BridgeToken(wrapped).mint(_recipient, _amount);
         emit Wrap(_underlying_token, wrapped, _recipient, _amount);
@@ -40,8 +41,7 @@ contract Destination is AccessControl {
         require(_amount     > 0,          "Destination: zero amount");
 
 		address underlying = wrapped_tokens[_wrapped_token];
-        require(underlying != address(0),
-                "Destination: wrapped token unknown");
+        if (underlying == address(0)) revert UnregisteredToken();
 
 		BridgeToken(_wrapped_token).clawBack(msg.sender, _amount);
 		emit Unwrap(underlying,

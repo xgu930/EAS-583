@@ -24,17 +24,21 @@ contract Destination is AccessControl {
 
 	function wrap(address _underlying_token, address _recipient, uint256 _amount ) public onlyRole(WARDEN_ROLE) {
 		//YOUR CODE HERE
-		address wrapped = underlying_tokens[_underlying_token];
-        require(wrapped != address(0),
-                "Destination: underlying not registered");
+		require(_recipient != address(0), "Destination: zero recipient");
+        require(_amount     > 0,          "Destination: zero amount");
 
-		BridgeToken(wrapped).mint(_recipient, _amount);
-		emit Wrap(_underlying_token, wrapped, _recipient, _amount);
+        address wrapped = underlying_tokens[_underlying_token];
+        require(wrapped != address(0),    "Destination: underlying not registered");
 
+        BridgeToken(wrapped).mint(_recipient, _amount);
+        emit Wrap(_underlying_token, wrapped, _recipient, _amount);
 	}
 
 	function unwrap(address _wrapped_token, address _recipient, uint256 _amount ) public {
 		//YOUR CODE HERE
+        require(_recipient != address(0), "Destination: zero recipient");
+        require(_amount     > 0,          "Destination: zero amount");
+
 		address underlying = wrapped_tokens[_wrapped_token];
         require(underlying != address(0),
                 "Destination: wrapped token unknown");
@@ -49,6 +53,8 @@ contract Destination is AccessControl {
 
 	function createToken(address _underlying_token, string memory name, string memory symbol ) public onlyRole(CREATOR_ROLE) returns(address) {
 		//YOUR CODE HERE
+        require(_underlying_token != address(0),
+                "Destination: zero underlying");
 		require(
             underlying_tokens[_underlying_token] == address(0),
             "Destination: token already registered"
@@ -59,7 +65,6 @@ contract Destination is AccessControl {
 
 		underlying_tokens[_underlying_token] = address(wrapped);
         wrapped_tokens[address(wrapped)] = _underlying_token;
-
         tokens.push(address(wrapped));
 
         emit Creation(_underlying_token, address(wrapped));

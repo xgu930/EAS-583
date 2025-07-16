@@ -64,16 +64,15 @@ contract Destination is AccessControl {
         if (_underlying_token == address(0)) revert ZeroAddress();
         if (underlying_tokens[_underlying_token] != address(0)) revert AlreadyRegistered();
 
-		BridgeToken wrapped = new BridgeToken(_underlying_token, name, symbol, address(this));
-        address wrappedAddr = address(wrapped);
+        emit Creation(_underlying_token, address(0));
+		BridgeToken wrapped =
+        new BridgeToken(_underlying_token, name, symbol, address(this));
 
-		underlying_tokens[_underlying_token] = wrappedAddr;
-        wrapped_tokens[wrappedAddr] = _underlying_token;
-        tokens.push(wrappedAddr);
+		underlying_tokens[_underlying_token] = address(wrapped);
+        wrapped_tokens[address(wrapped)]     = _underlying_token;
+        tokens.push(address(wrapped));
 
-        emit Creation(_underlying_token, wrappedAddr);
-
-        return wrappedAddr;
+        return address(wrapped);
 	}
 
 }

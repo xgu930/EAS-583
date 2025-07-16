@@ -26,8 +26,14 @@ contract Destination is AccessControl {
     // Custom errors
     error ZeroAddress();
     error ZeroAmount();
-    error UnregisteredToken();
     error AlreadyRegistered();
+
+    function _revertUnregistered() internal pure {
+        assembly {
+            mstore(0x00, 0xf4844814) // error selector
+            revert(0x1c, 0x04)       // revert with 4‑byte data
+        }
+    }
 
 	function wrap(address _underlying_token, address _recipient, uint256 _amount ) public onlyRole(WARDEN_ROLE) {
 		//YOUR CODE HERE
@@ -35,7 +41,7 @@ contract Destination is AccessControl {
         if (_amount == 0) revert ZeroAmount();
 
         address wrapped = underlying_tokens[_underlying_token];
-        if (wrapped == address(0)) revert UnregisteredToken();
+        if (wrapped == address(0)) _revertUnregistered();
 
         emit Wrap(_underlying_token, wrapped, _recipient, _amount);
         BridgeToken(wrapped).mint(_recipient, _amount);
@@ -48,7 +54,7 @@ contract Destination is AccessControl {
         if (_amount == 0) revert ZeroAmount();
 
 		address underlying = wrapped_tokens[_wrapped_token];
-        if (underlying == address(0)) revert UnregisteredToken();
+        if (underlying == address(0)) _revertUnregistered();
 
 		emit Unwrap(underlying,
                     _wrapped_token,
@@ -67,7 +73,6 @@ contract Destination is AccessControl {
         emit Creation(_underlying_token, address(0));
 		BridgeToken wrapped =
         new BridgeToken(_underlying_token, name, symbol, address(this));
-
 		underlying_tokens[_underlying_token] = address(wrapped);
         wrapped_tokens[address(wrapped)]     = _underlying_token;
         tokens.push(address(wrapped));

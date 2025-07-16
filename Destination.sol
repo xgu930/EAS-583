@@ -40,7 +40,7 @@ contract Destination is AccessControl {
 		if (_recipient == address(0)) revert ZeroAddress();
         if (_amount == 0) revert ZeroAmount();
 
-        address wrapped = underlying_tokens[_underlying_token];
+        address wrapped = wrapped_tokens[_underlying_token];
         if (wrapped == address(0)) _revertUnregistered();
 
         emit Wrap(_underlying_token, wrapped, _recipient, _amount);
@@ -53,7 +53,7 @@ contract Destination is AccessControl {
         if (_recipient == address(0)) revert ZeroAddress();
         if (_amount == 0) revert ZeroAmount();
 
-		address underlying = wrapped_tokens[_wrapped_token];
+		address underlying = underlying_tokens[_wrapped_token];
         if (underlying == address(0)) _revertUnregistered();
 
 		emit Unwrap(underlying,
@@ -71,15 +71,15 @@ contract Destination is AccessControl {
         if (underlying_tokens[_underlying_token] != address(0)) revert AlreadyRegistered();
 
         emit Creation(_underlying_token, address(0));
-		BridgeToken wrapped =
-        new BridgeToken(_underlying_token, name, symbol, address(this));
-		underlying_tokens[_underlying_token] = address(wrapped);
-        wrapped_tokens[address(wrapped)]     = _underlying_token;
+
+        BridgeToken wrapped = new BridgeToken(_underlying_token, name, symbol, address(this));
+
+        wrapped_tokens[_underlying_token]   = address(wrapped);
+        underlying_tokens[address(wrapped)] = _underlying_token;
         tokens.push(address(wrapped));
 
         return address(wrapped);
 	}
 
 }
-
 

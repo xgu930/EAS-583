@@ -9,3 +9,5 @@ __pycache__/
 # venv/
 
 ipfs_test.py
+
+venv/

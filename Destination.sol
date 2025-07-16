@@ -23,25 +23,15 @@ contract Destination is AccessControl {
         _grantRole(WARDEN_ROLE, admin);
     }
 
-    // Custom errors
-    error ZeroAddress();
-    error ZeroAmount();
-    error AlreadyRegistered();
 
-    function _revertUnregistered() internal pure {
-        assembly {
-            mstore(0x00, 0xf4844814) // error selector
-            revert(0x1c, 0x04)       // revert with 4‑byte data
-        }
-    }
 
 	function wrap(address _underlying_token, address _recipient, uint256 _amount ) public onlyRole(WARDEN_ROLE) {
 		//YOUR CODE HERE
-		if (_recipient == address(0)) revert ZeroAddress();
-        if (_amount == 0) revert ZeroAmount();
+		require(_recipient != address(0),            "Destination: zero recipient");
+        require(_amount    != 0,                     "Destination: zero amount");
 
         address wrapped = wrapped_tokens[_underlying_token];
-        if (wrapped == address(0)) _revertUnregistered();
+        require(wrapped != address(0),               "Destination: unregistered token");
 
         emit Wrap(_underlying_token, wrapped, _recipient, _amount);
         BridgeToken(wrapped).mint(_recipient, _amount);
@@ -50,11 +40,13 @@ contract Destination is AccessControl {
 
 	function unwrap(address _wrapped_token, address _recipient, uint256 _amount ) public {
 		//YOUR CODE HERE
-        if (_recipient == address(0)) revert ZeroAddress();
-        if (_amount == 0) revert ZeroAmount();
+        require(_recipient != address(0),            "Destination: zero recipient");
+        require(_amount    != 0,                     "Destination: zero amount");
+
 
 		address underlying = underlying_tokens[_wrapped_token];
-        if (underlying == address(0)) _revertUnregistered();
+        require(underlying != address(0),            "Destination: unregistered token");
+
 
 		emit Unwrap(underlying,
                     _wrapped_token,
@@ -67,8 +59,9 @@ contract Destination is AccessControl {
 
 	function createToken(address _underlying_token, string memory name, string memory symbol ) public onlyRole(CREATOR_ROLE) returns(address) {
 		//YOUR CODE HERE
-        if (_underlying_token == address(0)) revert ZeroAddress();
-        if (underlying_tokens[_underlying_token] != address(0)) revert AlreadyRegistered();
+        require(_underlying_token != address(0),     "Destination: zero underlying");
+        require(underlying_tokens[_underlying_token] == address(0),
+                                                    "Destination: already registered");
 
         emit Creation(_underlying_token, address(0));
 

@@ -61,7 +61,7 @@ contract Destination is AccessControl {
             underlying_tokens[_underlying_token] == address(0),
             "Destination: token already registered"
         );
-        emit Creation(_underlying_token, address(wrapped));
+        emit Creation(_underlying_token, address(0));
 
 		BridgeToken wrapped =
             new BridgeToken(_underlying_token, name, symbol, address(this));

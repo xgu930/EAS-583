@@ -90,25 +90,27 @@ def chunked_get_logs(event_fn, *, start_block: int, end_block: int,
 
 def scan_blocks(chain, contract_info="contract_info.json"):
     """
-        chain - (string) should be either "source" or "destination"
-        Scan the last 5 blocks of the source and destination chains
-        Look for 'Deposit' events on the source chain and 'Unwrap' events on the destination chain
-        When Deposit events are found on the source chain, call the 'wrap' function the destination chain
-        When Unwrap events are found on the destination chain, call the 'withdraw' function on the source chain
+    chain - (string) should be either "source" or "destination"
+    Scan the last 5 blocks of the source and destination chains
+    Look for 'Deposit' events on the source chain and 'Unwrap' events on the destination chain
+    When Deposit events are found on the source chain, call the 'wrap' function on the destination chain
+    When Unwrap events are found on the destination chain, call the 'withdraw' function on the source chain
     """
 
-    # This is different from Bridge IV where chain was "avax" or "bsc"
-    if chain not in ['source','destination']:
-        print( f"Invalid chain: {chain}" )
+    # Validate
+    if chain not in ['source', 'destination']:
+        print(f"Invalid chain: {chain}")
         return 0
-    
-        #YOUR CODE HERE
 
+    # Connect to both chains
     w3_src = connect_to('source')
     w3_dst = connect_to('destination')
+
+    # Load the JSON info
     src_conf = get_contract_info('source', contract_info)
     dst_conf = get_contract_info('destination', contract_info)
 
+    # Create contract instances
     Source = w3_src.eth.contract(
         address=Web3.to_checksum_address(src_conf["address"]),
         abi=src_conf["abi"]
@@ -118,16 +120,18 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         abi=dst_conf["abi"]
     )
 
+    # Load our account and last‐seen state
     acct = Web3().eth.account.from_key(load_key())
     state = load_state()
 
-    if chain == 'source':  # Deposit → wrap()
-        head = w3_src.eth.block_number
-        frm = state.get("fuji", max(0, head-2500)) + 1
+    if chain == 'source':
+
+        head_block = w3_src.eth.block_number
+        start_block = state.get("fuji", max(0, head_block - 2500)) + 1
 
         logs = chunked_get_logs(
             Source.events.Deposit.get_logs,
-            start_block=frm, end_block=head
+            start_block=start_block, end_block=head_block
         )
 
         nonce = w3_dst.eth.get_transaction_count(acct.address)
@@ -135,66 +139,66 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             token, recipient, amount = ev['args'].values()
             print(f"[Fuji] Deposit {amount} {token} → {recipient}")
 
-            tx = Dest.functions.wrap(token, recipient,
-                                     amount).build_transaction({
-                'from': acct.address,
-                'nonce': nonce,
-                'gas': 300_000,
-                'gasPrice': w3_dst.to_wei(10, 'gwei')
+            tx = Dest.functions.wrap(token, recipient, amount).build_transaction({
+                'from':     acct.address,
+                'nonce':    nonce,
+                'gas':      300_000,
+                'gasPrice': w3_dst.to_wei(10, 'gwei'),
             })
             nonce += 1
-            sent = w3_dst.eth.send_raw_transaction(
-                acct.sign_transaction(tx).raw_transaction)
-            print("      ↳ wrap() tx:", sent.hex())
 
-        state['fuji'] = head
+            signed = acct.sign_transaction(tx)
+            tx_hash = w3_dst.eth.send_raw_transaction(signed.raw_transaction)
+            print("      ↳ wrap() tx:", tx_hash.hex())
 
-    else:  # 'destination': Unwrap → withdraw()
-        head = w3_dst.eth.block_number
-        frm = state.get("bsc", max(0, head-2500)) + 1
+        # update state cursor
+        state['fuji'] = head_block
 
+    else:
 
-        # logs = chunked_get_logs(
-        #     Dest.events.Unwrap.get_logs,
-        #     start_block=frm, end_block=head
-        # )
+        head_block = w3_dst.eth.block_number
+        start_block = state.get("bsc", max(0, head_block - 2500)) + 1
+
+        # Try the chunked fetch first
         try:
-            logs_iter = chunked_get_logs(
+            logs = list(chunked_get_logs(
                 Dest.events.Unwrap.get_logs,
-                start_block=frm, end_block=head
-            )
-            logs = list(logs_iter)
+                start_block=start_block, end_block=head_block
+            ))
         except Exception as e:
-            print(
-                f"[WARN] chunked_get_logs failed: {e}; falling back to per-block fetch")
+            print(f"[WARN] chunked_get_logs failed: {e}; falling back to per-block fetch")
             logs = []
-            # Loop single blocks to avoid any RPC size limits
-            for b in range(frm, head + 1):
+            for b in range(start_block, head_block + 1):
                 try:
-                    events = Dest.events.Unwrap.get_logs(from_block=b,
-                                                         to_block=b)
+                    events = Dest.events.Unwrap.get_logs(from_block=b, to_block=b)
                     logs.extend(events)
                 except Exception:
-                    # skip any block that still fails
                     continue
 
         nonce = w3_src.eth.get_transaction_count(acct.address)
         for ev in logs:
-            underlying, wrapped, _, to_addr, amount = ev['args'].values()
-            print(f"[BSC]  Unwrap {amount} {wrapped} → {to_addr}")
+            args       = ev['args']
+            underlying = args['underlying_token']
+            wrapped    = args['wrapped_token']
+            sender     = args['frm']
+            to_addr    = args['to']
+            amount     = args['amount']
 
-            tx = Source.functions.withdraw(underlying, to_addr,
-                                           amount).build_transaction({
-                'from': acct.address,
-                'nonce': nonce,
-                'gas': 300_000,
-                'gasPrice': w3_src.to_wei(25, 'gwei')
+            print(f"[BSC]  Unwrap {amount} {wrapped} → {to_addr} (from {sender})")
+
+            tx = Source.functions.withdraw(underlying, to_addr, amount).build_transaction({
+                'from':     acct.address,
+                'nonce':    nonce,
+                'gas':      300_000,
+                'gasPrice': w3_src.to_wei(25, 'gwei'),
             })
             nonce += 1
-            sent = w3_src.eth.send_raw_transaction(
-                acct.sign_transaction(tx).raw_transaction)
-            print("      ↳ withdraw() tx:", sent.hex())
 
-        state['bsc'] = head
+            signed = acct.sign_transaction(tx)
+            tx_hash = w3_src.eth.send_raw_transaction(signed.raw_transaction)
+            print("      ↳ withdraw() tx:", tx_hash.hex())
+
+        # update state cursor
+        state['bsc'] = head_block
 
     save_state(state)

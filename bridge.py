@@ -56,43 +56,31 @@ def save_state(state: Dict[str,int]):
 def chunked_get_logs(event_contract, *, start_block: int, end_block: int,
                      step: int = 2, sleep_after: float = 0.3):
     """
-    Yields logs for a single event, slicing blocks into windows of size step,
-    sleeping after each successful fetch, halving window on 'limit exceeded',
-    and skipping any block that still fails at size 1.
-
-    event_contract: e.g. Dest.events.Unwrap
+    Stream logs for a single event (event_contract), fetching in small slices
+    and shrinking the window when the RPC complains about “limit exceeded”.
     """
-    # precompute the single-topic filter for this event
-    topic = event_contract().event_signature_hex
     cur = start_block
     while cur <= end_block:
         to_blk = min(cur + step - 1, end_block)
         try:
-            # only pull this one event via topics=[topic]
-            logs = event_contract.get_logs(
-                from_block=cur,
-                to_block=to_blk,
-                topics=[[topic]],
-            )
+            # ↓ no explicit topics – ContractEvent.get_logs adds them
+            logs = event_contract.get_logs(from_block=cur, to_block=to_blk)
             for ev in logs:
                 yield ev
+
             time.sleep(sleep_after)
             cur = to_blk + 1
+
         except ValueError as err:
-            msg = str(err).lower()
-            if "limit exceeded" in msg:
-                # if window == 1, give up on this block
-                if step <= 1:
-                    print(f"[WARN] block {cur} too large even alone; skipping")
+            if "limit exceeded" in str(err).lower():
+                if step == 1:
+                    print(f"[WARN] block {cur} still too heavy; skipping")
                     cur += 1
                 else:
                     step = max(1, step // 2)
-                    print(
-                        f"[WARN] limit exceeded; reducing window to {step} blocks")
+                    print(f"[WARN] limit exceeded; shrinking window to {step}")
                 continue
-            else:
-                # any other error, bubble up
-                raise
+            raise
 
 def scan_blocks(chain, contract_info="contract_info.json"):
     """

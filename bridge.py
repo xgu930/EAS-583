@@ -4,7 +4,9 @@ from web3.middleware import ExtraDataToPOAMiddleware #Necessary for POA chains
 from datetime import datetime
 import pandas as pd
 import json, pathlib, sys, os
-from typing import Dict, Any
+from typing import Dict
+import time
+from functools import partial
 
 
 def connect_to(chain):
@@ -51,6 +53,28 @@ def save_state(state: Dict[str,int]):
     pathlib.Path(STATEFILE).write_text(json.dumps(state))
 
 
+def chunked_get_logs(event_filter_fn, *, start_block: int, end_block: int,
+                     step: int = 1000, max_retry: int = 5):
+    cur = start_block
+    while cur <= end_block:
+        window_end = min(cur + step - 1, end_block)
+
+        for attempt in range(1, max_retry + 1):
+            try:
+                # yield each event as if you called event_filter_fn.get_logs()
+                yield from event_filter_fn(from_block=cur, to_block=window_end)
+                break  # success, move to next window
+            except ValueError as err:
+                info = err.args[0]
+                # {'code': -32005, 'message': 'limit exceeded'}
+                if isinstance(info, dict) and info.get("code") == -32005:
+                    # back‑off: 1s → 2s → 3s …
+                    time.sleep(attempt)
+                    continue
+                # any other error should bubble up
+                raise
+        cur = window_end + 1
+
 def scan_blocks(chain, contract_info="contract_info.json"):
     """
         chain - (string) should be either "source" or "destination"
@@ -86,16 +110,20 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     acct = Web3().eth.account.from_key(load_key())
 
     st = load_state()
-    last_fuji = st.get("fuji", 0)
-    last_bsc = st.get("bsc", 0)
 
     if chain == "source":
         head = w3_src.eth.block_number
-        frm = max(0, head - 5) if last_fuji == 0 else last_fuji + 1
-        deposits = Source.events.Deposit.get_logs(from_block=frm, to_block=head)
+        frm = st.get("fuji", head - 1) + 1
+
+        logs = chunked_get_logs(
+            Source.events.Deposit.get_logs,
+            start_block=frm,
+            end_block=head
+        )
+
         nonce_dst = w3_dst.eth.get_transaction_count(acct.address)
 
-        for ev in deposits:
+        for ev in logs:
             tok, recipient, amount = ev["args"].values()
             print(f"[Fuji] Deposit {amount} {tok} → {recipient}")
 
@@ -115,12 +143,16 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
     elif chain == "destination":
         head = w3_dst.eth.block_number
-        frm = max(0, head - 5) if last_bsc == 0 else last_bsc + 1
-        unwraps = Dest.events.Unwrap.get_logs(from_block=frm, to_block=head)
+        frm = st.get("bsc", head - 1) + 1
+        logs = chunked_get_logs(
+            Dest.events.Unwrap.get_logs,
+            start_block=frm,
+            end_block=head
+        )
 
         nonce_src = w3_src.eth.get_transaction_count(acct.address)
 
-        for ev in unwraps:
+        for ev in logs:
             underlying, wrapped, frm_addr, to, amount = ev["args"].values()
             print(f"[BSC]  Unwrap {amount} {wrapped} → {to}")
 

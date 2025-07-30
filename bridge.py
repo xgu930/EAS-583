@@ -55,6 +55,39 @@ def save_state(state: Dict[str,int]):
     pathlib.Path(STATEFILE).write_text(json.dumps(state))
 
 
+from web3._utils.events import event_abi_to_log_topic
+
+def event_topic(event_cls):
+    """Return topic0 for a web3 ContractEvent class."""
+    return event_abi_to_log_topic(event_cls._get_event_abi())
+
+def fetch_logs(event_cls, w3, start, end):
+    """Get logs for `event_cls` in [start,end], shrinking window on -32005."""
+    topic0 = event_topic(event_cls)
+    addr   = event_cls.address
+    step   = end - start + 1          # start with whole span
+    cur    = start
+    while cur <= end:
+        to_blk = min(cur + step - 1, end)
+        try:
+            return w3.eth.get_logs({
+                "fromBlock": cur,
+                "toBlock":   to_blk,
+                "address":   addr,
+                "topics":    [topic0]   # <‑‑ server‑side filter
+            })
+        except ValueError as e:
+            if isinstance(e.args[0], dict) and e.args[0]["code"] == -32005:
+                if step == 1:
+                    # block is hopelessly noisy; skip it
+                    print(f"[WARN] skipping noisy block {cur}")
+                    cur += 1
+                else:
+                    step //= 2          # halve window and retry
+                continue
+            raise
+    return []   # got nothing
+
 
 def scan_blocks(chain, contract_info="contract_info.json"):
     """
@@ -110,9 +143,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     else:  # ---------------- Unwrap ➜ withdraw
         head = w3_dst.eth.block_number
         frm = max(state.get("bsc", head - 4) + 1, head - 4)
-        to = head
-
-        logs = C_dst.events.Unwrap.get_logs(from_block=frm, to_block=to)
+        logs = fetch_logs(C_dst.events.Unwrap, w3_dst, frm, head)
 
         nonce = w3_src.eth.get_transaction_count(acct.address)
         for ev in logs:

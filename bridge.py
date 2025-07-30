@@ -41,50 +41,20 @@ KEY_FILE  = "secret_key.txt"
 STATEFILE = ".bridge.last"
 
 def load_key() -> str:
-    key = pathlib.Path(KEY_FILE).read_text().strip()
-    return key if key.startswith("0x") else "0x"+key
+    raw = pathlib.Path(KEY_FILE).read_text().strip()
+    return raw if raw.startswith("0x") else "0x"+raw
+
 
 def load_state() -> Dict[str,int]:
     if pathlib.Path(STATEFILE).exists():
         return json.loads(pathlib.Path(STATEFILE).read_text())
     return {}
 
+
 def save_state(state: Dict[str,int]):
     pathlib.Path(STATEFILE).write_text(json.dumps(state))
 
 
-def chunked_get_logs(event_contract, *, start_block: int, end_block: int,
-                     step: int = 2, sleep_after: float = 0.3):
-    """
-    Yields logs for a single event, slicing blocks into windows of size step,
-    sleeping after each successful fetch, halving window on 'limit exceeded',
-    and skipping any block that still fails at window=1.
-
-    event_contract: e.g. Source.events.Deposit or Dest.events.Unwrap
-    """
-    cur = start_block
-    while cur <= end_block:
-        to_blk = min(cur + step - 1, end_block)
-        try:
-            logs = event_contract.get_logs(from_block=cur, to_block=to_blk)
-            for ev in logs:
-                yield ev
-            time.sleep(sleep_after)
-            cur = to_blk + 1
-        except Exception as err:
-            msg = str(err).lower()
-            if "limit exceeded" in msg:
-                # if window == 1, give up on this block
-                if step <= 1:
-                    print(f"[WARN] block {cur} too large even alone; skipping")
-                    cur += 1
-                else:
-                    step = max(1, step // 2)
-                    print(f"[WARN] limit exceeded; reducing window to {step} blocks")
-                continue
-            else:
-                # any other error, bubble up
-                raise
 
 def scan_blocks(chain, contract_info="contract_info.json"):
     """
@@ -99,96 +69,70 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         print(f"Invalid chain: {chain}")
         return 0
 
-    # Connect to both chains
     w3_src = connect_to('source')
     w3_dst = connect_to('destination')
+    src = get_contract_info('source', contract_info)
+    dst = get_contract_info('destination', contract_info)
 
-    # Load the JSON info
-    src_conf = get_contract_info('source', contract_info)
-    dst_conf = get_contract_info('destination', contract_info)
+    C_src = w3_src.eth.contract(src["address"], abi=src["abi"])
+    C_dst = w3_dst.eth.contract(dst["address"], abi=dst["abi"])
 
-    # Create contract instances
-    Source = w3_src.eth.contract(
-        address=Web3.to_checksum_address(src_conf["address"]),
-        abi=src_conf["abi"]
-    )
-    Dest = w3_dst.eth.contract(
-        address=Web3.to_checksum_address(dst_conf["address"]),
-        abi=dst_conf["abi"]
-    )
-
-    # Load our account and last‐seen state
     acct = Web3().eth.account.from_key(load_key())
     state = load_state()
 
-    if chain == 'source':
+
+    if chain == "source":  # ---------------- Deposit ➜ wrap
         head = w3_src.eth.block_number
-        start = state.get("fuji",
-                          head - 100) + 1  # ← use stored cursor or fallback
-        logs = chunked_get_logs(Source.events.Deposit,
-                                start_block=start, end_block=head)
+        frm = max(state.get("fuji", head - 4) + 1, head - 4)  # newest 5 blocks
+        to = head
+
+        # topic‑filtered Deposit logs (cheapest possible RPC call)
+        logs = C_src.events.Deposit.get_logs(from_block=frm, to_block=to)
 
         nonce = w3_dst.eth.get_transaction_count(acct.address)
         for ev in logs:
-            args = ev['args']
-            token, recipient, amount = args['token'], args['recipient'], args[
-                'amount']
-            print(f"[Fuji] Deposit {amount} {token} → {recipient}")
+            tkn, rcpt, amt = ev["args"]["token"], ev["args"]["recipient"], \
+            ev["args"]["amount"]
+            print(f"[Fuji] Deposit {amt} {tkn} → {rcpt}")
 
-            tx = Dest.functions.wrap(token, recipient,
-                                     amount).build_transaction({
-                'from': acct.address,
-                'nonce': nonce,
-                'gas': 300_000,
-                'gasPrice': w3_dst.to_wei(10, 'gwei'),
+            tx = C_dst.functions.wrap(tkn, rcpt, amt).build_transaction({
+                "from": acct.address,
+                "nonce": nonce,
+                "gas": 300_000,
+                "gasPrice": w3_dst.to_wei(10, "gwei"),
             })
+            tx_hash = w3_dst.eth.send_raw_transaction(
+                acct.sign_transaction(tx).raw_transaction)
+            print("   ↳ wrap() tx:", tx_hash.hex())
             nonce += 1
 
-            signed = acct.sign_transaction(tx)
-            tx_hash = w3_dst.eth.send_raw_transaction(signed.raw_transaction)
-            print("      ↳ wrap() tx:", tx_hash.hex())
-
-        state['fuji'] = head
-
-    else:  # destination → withdraw on source
+        state["fuji"] = head  # advance cursor
+    else:  # ---------------- Unwrap ➜ withdraw
         head = w3_dst.eth.block_number
-        start = state.get("bsc", head - 100) + 1
-        try:
-            logs = list(chunked_get_logs(Dest.events.Unwrap,
-                                         start_block=start, end_block=head))
-        except Exception as e:
-            print(
-                f"[WARN] chunked_get_logs failed: {e}; falling back to per-block fetch")
-            logs = []
-            for b in range(start, head + 1):
-                try:
-                    evs = Dest.events.Unwrap.get_logs(from_block=b, to_block=b)
-                    logs.extend(evs)
-                except Exception:
-                    continue
+        frm = max(state.get("bsc", head - 4) + 1, head - 4)
+        to = head
+
+        logs = C_dst.events.Unwrap.get_logs(from_block=frm, to_block=to)
 
         nonce = w3_src.eth.get_transaction_count(acct.address)
         for ev in logs:
-            args = ev['args']
-            underlying = args['underlying_token']
-            wrapped = args['wrapped_token']
-            to_addr = args['to']
-            amount = args['amount']
-            print(f"[BSC]  Unwrap {amount} {wrapped} → {to_addr}")
+            args = ev["args"]
+            u_tkn, to_addr, amt = args["underlying_token"], args["to"], args[
+                "amount"]
+            print(f"[BSC] Unwrap {amt} {u_tkn} → {to_addr}")
 
-            tx = Source.functions.withdraw(underlying, to_addr,
-                                           amount).build_transaction({
-                'from': acct.address,
-                'nonce': nonce,
-                'gas': 300_000,
-                'gasPrice': w3_src.to_wei(25, 'gwei'),
+            tx = C_src.functions.withdraw(u_tkn, to_addr,
+                                          amt).build_transaction({
+                "from": acct.address,
+                "nonce": nonce,
+                "gas": 300_000,
+                "gasPrice": w3_src.to_wei(25, "gwei"),
             })
+            tx_hash = w3_src.eth.send_raw_transaction(
+                acct.sign_transaction(tx).raw_transaction)
+            print("   ↳ withdraw() tx:", tx_hash.hex())
             nonce += 1
 
-            signed = acct.sign_transaction(tx)
-            tx_hash = w3_src.eth.send_raw_transaction(signed.raw_transaction)
-            print("      ↳ withdraw() tx:", tx_hash.hex())
-
-        state['bsc'] = head
+        state["bsc"] = head  # advance cursor
 
     save_state(state)

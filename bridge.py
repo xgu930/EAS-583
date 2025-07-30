@@ -53,40 +53,46 @@ def save_state(state: Dict[str,int]):
     pathlib.Path(STATEFILE).write_text(json.dumps(state))
 
 
-def chunked_get_logs(event_fn, *, start_block: int, end_block: int,
-                     step: int = 250, max_retry: int = 6, min_step: int = 10):
+def chunked_get_logs(event_contract, *, start_block: int, end_block: int,
+                     step: int = 2, sleep_after: float = 0.3):
     """
-    Yields events from event_fn(from_block, to_block) in slices,
-    retrying on 'limit exceeded' and shrinking window if needed.
+    Yields logs for a single event, slicing blocks into windows of size step,
+    sleeping after each successful fetch, halving window on 'limit exceeded',
+    and skipping any block that still fails at size 1.
+
+    event_contract: e.g. Dest.events.Unwrap
     """
+    # precompute the single-topic filter for this event
+    topic = event_contract().event_signature_hex
     cur = start_block
     while cur <= end_block:
-        window_end = min(cur + step - 1, end_block)
-
-        for attempt in range(1, max_retry + 1):
-            try:
-                yield from event_fn(from_block=cur, to_block=window_end)
-                break
-            except ValueError as err:
-                msg = str(err).lower()
-                is_quota = (
-                    "limit exceeded" in msg or
-                    (isinstance(err.args[0], dict) and err.args[0].get("code") == -32005)
-                )
-                if not is_quota:
-                    raise
-                time.sleep(attempt)
-        else:
-            # reduce window and retry same range
-            if step // 2 < min_step:
-                print(f"[WARN] skipping stubborn slice {cur}-{window_end}")
-                cur = window_end + 1
+        to_blk = min(cur + step - 1, end_block)
+        try:
+            # only pull this one event via topics=[topic]
+            logs = event_contract.get_logs(
+                from_block=cur,
+                to_block=to_blk,
+                topics=[[topic]],
+            )
+            for ev in logs:
+                yield ev
+            time.sleep(sleep_after)
+            cur = to_blk + 1
+        except ValueError as err:
+            msg = str(err).lower()
+            if "limit exceeded" in msg:
+                # if window == 1, give up on this block
+                if step <= 1:
+                    print(f"[WARN] block {cur} too large even alone; skipping")
+                    cur += 1
+                else:
+                    step = max(1, step // 2)
+                    print(
+                        f"[WARN] limit exceeded; reducing window to {step} blocks")
                 continue
-            #     raise RuntimeError(f"Block slice {cur}-{window_end} still too big")
-            step //= 2
-            continue
-
-        cur = window_end + 1
+            else:
+                # any other error, bubble up
+                raise
 
 def scan_blocks(chain, contract_info="contract_info.json"):
     """
@@ -97,7 +103,6 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     When Unwrap events are found on the destination chain, call the 'withdraw' function on the source chain
     """
 
-    # Validate
     if chain not in ['source', 'destination']:
         print(f"Invalid chain: {chain}")
         return 0
@@ -125,18 +130,16 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     state = load_state()
 
     if chain == 'source':
-
-        head_block = w3_src.eth.block_number
-        start_block = state.get("fuji", max(0, head_block - 2500)) + 1
-
-        logs = chunked_get_logs(
-            Source.events.Deposit.get_logs,
-            start_block=start_block, end_block=head_block
-        )
+        head = w3_src.eth.block_number
+        start = max(head - 4, 0)
+        logs = chunked_get_logs(Source.events.Deposit, start_block=start,
+                                end_block=head)
 
         nonce = w3_dst.eth.get_transaction_count(acct.address)
         for ev in logs:
-            token, recipient, amount = ev['args'].values()
+            args = ev['args']
+            token, recipient, amount = args['token'], args['recipient'], args[
+                'amount']
             print(f"[Fuji] Deposit {amount} {token} → {recipient}")
 
             tx = Dest.functions.wrap(token, recipient, amount).build_transaction({
@@ -152,29 +155,13 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             print("      ↳ wrap() tx:", tx_hash.hex())
 
         # update state cursor
-        state['fuji'] = head_block
+        state['fuji'] = head
 
     else:
-
-        head_block = w3_dst.eth.block_number
-        start_block = state.get("bsc", max(0, head_block - 2500)) + 1
-
-        # Try the chunked fetch first
-        try:
-            logs = list(chunked_get_logs(
-                Dest.events.Unwrap.get_logs,
-                start_block=start_block, end_block=head_block
-            ))
-        except Exception as e:
-            print(f"[WARN] chunked_get_logs failed: {e}; falling back to per-block fetch")
-            logs = []
-            for b in range(start_block, head_block + 1):
-                try:
-                    events = Dest.events.Unwrap.get_logs(from_block=b, to_block=b)
-                    logs.extend(events)
-                except Exception:
-                    continue
-
+        head = w3_dst.eth.block_number
+        start = max(head - 4, 0)
+        logs = list(chunked_get_logs(Dest.events.Unwrap, start_block=start,
+                                     end_block=head))
         nonce = w3_src.eth.get_transaction_count(acct.address)
         for ev in logs:
             args       = ev['args']
@@ -199,6 +186,6 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             print("      ↳ withdraw() tx:", tx_hash.hex())
 
         # update state cursor
-        state['bsc'] = head_block
+        state['bsc'] = head
 
     save_state(state)

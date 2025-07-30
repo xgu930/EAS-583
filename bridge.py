@@ -79,7 +79,10 @@ def chunked_get_logs(event_fn, *, start_block: int, end_block: int,
         else:
             # reduce window and retry same range
             if step // 2 < min_step:
-                raise RuntimeError(f"Block slice {cur}-{window_end} still too big")
+                print(f"[WARN] skipping stubborn slice {cur}-{window_end}")
+                cur = window_end + 1
+                continue
+            #     raise RuntimeError(f"Block slice {cur}-{window_end} still too big")
             step //= 2
             continue
 
@@ -120,7 +123,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
     if chain == 'source':  # Deposit → wrap()
         head = w3_src.eth.block_number
-        frm = state.get('fuji', head - 1) + 1
+        frm = state.get("fuji", max(0, head-2500)) + 1
 
         logs = chunked_get_logs(
             Source.events.Deposit.get_logs,
@@ -148,7 +151,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
     else:  # 'destination': Unwrap → withdraw()
         head = w3_dst.eth.block_number
-        frm = state.get('bsc', head - 1) + 1
+        frm = state.get("bsc", max(0, head-2500)) + 1
+
 
         logs = chunked_get_logs(
             Dest.events.Unwrap.get_logs,

@@ -37,8 +37,8 @@ def get_contract_info(chain, contract_info):
     return contracts[chain]
 
 
-KEY_FILE  = "secret_key.txt"     # same file you used earlier
-STATEFILE = ".bridge.last"       # remember last processed block
+KEY_FILE  = "secret_key.txt"
+STATEFILE = ".bridge.last"
 
 def load_key() -> str:
     key = pathlib.Path(KEY_FILE).read_text().strip()
@@ -154,10 +154,29 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         frm = state.get("bsc", max(0, head-2500)) + 1
 
 
-        logs = chunked_get_logs(
-            Dest.events.Unwrap.get_logs,
-            start_block=frm, end_block=head
-        )
+        # logs = chunked_get_logs(
+        #     Dest.events.Unwrap.get_logs,
+        #     start_block=frm, end_block=head
+        # )
+        try:
+            logs_iter = chunked_get_logs(
+                Dest.events.Unwrap.get_logs,
+                start_block=frm, end_block=head
+            )
+            logs = list(logs_iter)
+        except Exception as e:
+            print(
+                f"[WARN] chunked_get_logs failed: {e}; falling back to per-block fetch")
+            logs = []
+            # Loop single blocks to avoid any RPC size limits
+            for b in range(frm, head + 1):
+                try:
+                    events = Dest.events.Unwrap.get_logs(from_block=b,
+                                                         to_block=b)
+                    logs.extend(events)
+                except Exception:
+                    # skip any block that still fails
+                    continue
 
         nonce = w3_src.eth.get_transaction_count(acct.address)
         for ev in logs:

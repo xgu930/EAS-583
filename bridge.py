@@ -54,24 +54,27 @@ def save_state(state: Dict[str,int]):
 
 
 def chunked_get_logs(event_filter_fn, *, start_block: int, end_block: int,
-                     step: int = 1000, max_retry: int = 5):
+                     step: int = 250, max_retry: int = 6):
+    """
+    Fetch logs in <step>-block chunks. Retries on RPC 'limit exceeded'
+    (code −32005 or plain‑text message), backing off with time.sleep().
+    """
     cur = start_block
     while cur <= end_block:
         window_end = min(cur + step - 1, end_block)
 
         for attempt in range(1, max_retry + 1):
             try:
-                # yield each event as if you called event_filter_fn.get_logs()
                 yield from event_filter_fn(from_block=cur, to_block=window_end)
-                break  # success, move to next window
+                break
             except ValueError as err:
-                info = err.args[0]
-                # {'code': -32005, 'message': 'limit exceeded'}
-                if isinstance(info, dict) and info.get("code") == -32005:
-                    # back‑off: 1s → 2s → 3s …
+                # Handles BOTH dict‑style and string‑style errors
+                msg = str(err).lower()
+                if ("limit exceeded" in msg or      # string form
+                    (isinstance(err.args[0], dict) and
+                     err.args[0].get("code") == -32005)):  # dict form
                     time.sleep(attempt)
                     continue
-                # any other error should bubble up
                 raise
         cur = window_end + 1
 

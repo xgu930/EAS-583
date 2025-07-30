@@ -92,7 +92,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     if chain == "source":
         head = w3_src.eth.block_number
         frm = max(0, head - 5) if last_fuji == 0 else last_fuji + 1
-        deposits = Source.events.Deposit.get_logs(fromBlock=frm, toBlock=head)
+        deposits = Source.events.Deposit.get_logs(from_block=frm, to_block=head)
         nonce_dst = w3_dst.eth.get_transaction_count(acct.address)
 
         for ev in deposits:
@@ -116,7 +116,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     elif chain == "destination":
         head = w3_dst.eth.block_number
         frm = max(0, head - 5) if last_bsc == 0 else last_bsc + 1
-        unwraps = Dest.events.Unwrap.get_logs(fromBlock=frm, toBlock=head)
+        unwraps = Dest.events.Unwrap.get_logs(from_block=frm, to_block=head)
 
         nonce_src = w3_src.eth.get_transaction_count(acct.address)
 

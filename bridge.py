@@ -77,64 +77,86 @@ def chunked_get_logs(event_contract, *, start_block, end_block,
                 continue
             raise
 
-
-def scan_blocks(chain, contract_info="contract_info.json"):
-
+def scan_blocks(chain: str, contract_info="contract_info.json"):
+    """
+    * source-mode :  Deposit events  ➜ wrap() on destination
+    * destination :  Unwrap events  ➜ withdraw() on source
+    The scan window is “last 5 blocks” or from the saved cursor onward.
+    """
     if chain not in ("source", "destination"):
-        print("Invalid chain:", chain); return
+        print("Invalid chain:", chain)
+        return
 
     w3_src = connect_to("source")
     w3_dst = connect_to("destination")
-    src = get_contract_info("source", contract_info)
-    dst = get_contract_info("destination", contract_info)
 
-    C_src = w3_src.eth.contract(address=Web3.to_checksum_address(src["address"]),
-                                abi=src["abi"])
-    C_dst = w3_dst.eth.contract(address=Web3.to_checksum_address(dst["address"]),
-                                abi=dst["abi"])
+    src_cfg = get_contract_info("source", contract_info)
+    dst_cfg = get_contract_info("destination", contract_info)
+
+    C_src = w3_src.eth.contract(
+        address=Web3.to_checksum_address(src_cfg["address"]),
+        abi=src_cfg["abi"]
+    )
+    C_dst = w3_dst.eth.contract(
+        address=Web3.to_checksum_address(dst_cfg["address"]),
+        abi=dst_cfg["abi"]
+    )
 
     acct  = Web3().eth.account.from_key(load_key())
     state = load_state()
 
-
-    if chain == "source":
+    if chain == "source":                                   # ---------- Deposit → wrap
         head = w3_src.eth.block_number
-        frm  = max(state.get("fuji", head-100) + 1, head-100)
-        logs = chunked_get_logs(C_src.events.Deposit,
-                                start_block=frm, end_block=head)
+        frm  = max(state.get("fuji", head - 5) + 1, head - 5)
+        # one filter, one RPC call
+        dep_filter = C_src.events.Deposit.create_filter(fromBlock=frm, toBlock=head)
+        logs = dep_filter.get_all_entries()
 
         nonce = w3_dst.eth.get_transaction_count(acct.address)
         for ev in logs:
-            t,r,a = ev["args"]["token"], ev["args"]["recipient"], ev["args"]["amount"]
-            print(f"[Fuji] Deposit {a} {t} → {r}")
-            tx = C_dst.functions.wrap(t,r,a).build_transaction({
-                "from": acct.address, "nonce": nonce,
-                "gas": 300_000, "gasPrice": w3_dst.to_wei(10,"gwei")
-            })
-            signed = acct.sign_transaction(tx)
-            print("   ↳ wrap() tx:", w3_dst.eth.send_raw_transaction(
-                  signed.raw_transaction).hex())
-            nonce += 1
-        state["fuji"] = head
+            args = ev["args"]
+            token, recipient, amount = args["token"], args["recipient"], args["amount"]
+            print(f"[Fuji] Deposit {amount} {token} → {recipient}")
 
-    else:
+            tx = C_dst.functions.wrap(token, recipient, amount).build_transaction(
+                {"from": acct.address,
+                 "nonce": nonce,
+                 "gas": 300_000,
+                 "gasPrice": w3_dst.to_wei(10, "gwei")}
+            )
+            tx_hash = w3_dst.eth.send_raw_transaction(
+                acct.sign_transaction(tx).raw_transaction)
+            print("   ↳ wrap() tx:", tx_hash.hex())
+            nonce += 1
+
+        state["fuji"] = head                                   # advance cursor
+
+    else:                                                      # ---------- Unwrap → withdraw
         head = w3_dst.eth.block_number
-        frm  = max(state.get("bsc", head-100) + 1, head-100)
-        logs = list(chunked_get_logs(C_dst.events.Unwrap,
-                                     start_block=frm, end_block=head))
+        frm  = max(state.get("bsc", head - 5) + 1, head - 5)
+        un_filter = C_dst.events.Unwrap.create_filter(fromBlock=frm, toBlock=head)
+        logs = un_filter.get_all_entries()
+
         nonce = w3_src.eth.get_transaction_count(acct.address)
         for ev in logs:
             args = ev["args"]
-            u,to_addr,a = args["underlying_token"], args["to"], args["amount"]
-            print(f"[BSC]  Unwrap {a} {u} → {to_addr}")
-            tx = C_src.functions.withdraw(u,to_addr,a).build_transaction({
-                "from": acct.address, "nonce": nonce,
-                "gas": 300_000, "gasPrice": w3_src.to_wei(25,"gwei")
-            })
-            signed = acct.sign_transaction(tx)
-            print("   ↳ withdraw() tx:",
-                  w3_src.eth.send_raw_transaction(signed.raw_transaction).hex())
+            underlying = args["underlying_token"]
+            to_addr    = args["to"]
+            amount     = args["amount"]
+            print(f"[BSC] Unwrap {amount} {underlying} → {to_addr}")
+
+            tx = C_src.functions.withdraw(underlying, to_addr, amount).build_transaction(
+                {"from": acct.address,
+                 "nonce": nonce,
+                 "gas": 300_000,
+                 "gasPrice": w3_src.to_wei(25, "gwei")}
+            )
+            tx_hash = w3_src.eth.send_raw_transaction(
+                acct.sign_transaction(tx).raw_transaction)
+            print("   ↳ withdraw() tx:", tx_hash.hex())
             nonce += 1
-        state["bsc"] = head
+
+        state["bsc"] = head                                     # advance cursor
 
     save_state(state)
+    

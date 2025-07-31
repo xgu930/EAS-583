@@ -56,27 +56,6 @@ def save_state(state: Dict[str,int]):
 
 
 
-def chunked_get_logs(event_contract, *, start_block, end_block,
-                     step=2, sleep_after=0.3):
-    cur = start_block
-    while cur <= end_block:
-        to_blk = min(cur + step - 1, end_block)
-        try:
-            for ev in event_contract.get_logs(from_block=cur, to_block=to_blk):
-                yield ev
-            time.sleep(sleep_after)
-            cur = to_blk + 1
-        except ValueError as err:
-            if "-32005" in str(err):
-                if step <= 1:
-                    print(f"[WARN] block {cur} too noisy; skipping")
-                    cur += 1
-                else:
-                    step //= 2
-                    print(f"[WARN] limit exceeded; step→{step}")
-                continue
-            raise
-
 def scan_blocks(chain: str, contract_info="contract_info.json"):
     """
     * source-mode :  Deposit events  ➜ wrap() on destination
@@ -109,7 +88,7 @@ def scan_blocks(chain: str, contract_info="contract_info.json"):
         head = w3_src.eth.block_number
         frm  = max(state.get("fuji", head - 5) + 1, head - 5)
         # one filter, one RPC call
-        dep_filter = C_src.events.Deposit.create_filter(fromBlock=frm, toBlock=head)
+        dep_filter = C_src.events.Deposit.create_filter(from_block=frm, to_block=head)
         logs = dep_filter.get_all_entries()
 
         nonce = w3_dst.eth.get_transaction_count(acct.address)
@@ -129,12 +108,12 @@ def scan_blocks(chain: str, contract_info="contract_info.json"):
             print("   ↳ wrap() tx:", tx_hash.hex())
             nonce += 1
 
-        state["fuji"] = head                                   # advance cursor
+        state["fuji"] = head
 
     else:                                                      # ---------- Unwrap → withdraw
         head = w3_dst.eth.block_number
         frm  = max(state.get("bsc", head - 5) + 1, head - 5)
-        un_filter = C_dst.events.Unwrap.create_filter(fromBlock=frm, toBlock=head)
+        un_filter = C_dst.events.Unwrap.create_filter(from_block=frm, to_block=head)
         logs = un_filter.get_all_entries()
 
         nonce = w3_src.eth.get_transaction_count(acct.address)
@@ -159,4 +138,3 @@ def scan_blocks(chain: str, contract_info="contract_info.json"):
         state["bsc"] = head                                     # advance cursor
 
     save_state(state)
-    

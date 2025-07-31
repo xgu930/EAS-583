@@ -5,7 +5,6 @@ from datetime import datetime
 import pandas as pd
 import json, pathlib
 from typing import Dict
-import time
 
 
 
@@ -58,14 +57,19 @@ def save_state(state: Dict[str,int]):
 
 def scan_blocks(chain: str, contract_info="contract_info.json"):
     """
-    * source-mode :  Deposit events  ➜ wrap() on destination
-    * destination :  Unwrap events  ➜ withdraw() on source
-    The scan window is “last 5 blocks” or from the saved cursor onward.
+        chain - (string) should be either "source" or "destination"
+        Scan the last 5 blocks of the source and destination chains
+        Look for 'Deposit' events on the source chain and 'Unwrap' events on the destination chain
+        When Deposit events are found on the source chain, call the 'wrap' function the destination chain
+        When Unwrap events are found on the destination chain, call the 'withdraw' function on the source chain
     """
+
+    # This is different from Bridge IV where chain was "avax" or "bsc"
     if chain not in ("source", "destination"):
         print("Invalid chain:", chain)
         return
 
+    # YOUR CODE HERE
     w3_src = connect_to("source")
     w3_dst = connect_to("destination")
 
@@ -84,9 +88,9 @@ def scan_blocks(chain: str, contract_info="contract_info.json"):
     acct  = Web3().eth.account.from_key(load_key())
     state = load_state()
 
-    if chain == "source":                                   # ---------- Deposit → wrap
-        head = w3_src.eth.block_number
+    if chain == "source":
         frm  = state.get("fuji", 0) + 1
+
         # one filter, one RPC call
         dep_filter = C_src.events.Deposit.create_filter(from_block=frm, to_block="latest")
         logs = dep_filter.get_all_entries()
@@ -110,8 +114,7 @@ def scan_blocks(chain: str, contract_info="contract_info.json"):
 
         state["fuji"] = w3_src.eth.block_number
 
-    else:                                                      # ---------- Unwrap → withdraw
-        head = w3_dst.eth.block_number
+    else:
         frm  = state.get("bsc", 0) + 1
         un_filter = C_dst.events.Unwrap.create_filter(from_block=frm, to_block="latest")
         logs = un_filter.get_all_entries()
@@ -135,6 +138,6 @@ def scan_blocks(chain: str, contract_info="contract_info.json"):
             print("   ↳ withdraw() tx:", tx_hash.hex())
             nonce += 1
 
-        state["bsc"] = w3_dst.eth.block_number                                     # advance cursor
+        state["bsc"] = w3_dst.eth.block_number
 
     save_state(state)

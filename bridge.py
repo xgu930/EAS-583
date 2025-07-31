@@ -53,7 +53,8 @@ def load_state() -> Dict[str,int]:
 def save_state(state: Dict[str,int]):
     pathlib.Path(STATEFILE).write_text(json.dumps(state))
 
-
+MAX_RANGE = 2_000   # provider limit is 2 048; stay safely under
+SAFETY    = 5       # always scan at least the last 5 new blocks
 
 def scan_blocks(chain: str, contract_info="contract_info.json"):
     """
@@ -89,7 +90,12 @@ def scan_blocks(chain: str, contract_info="contract_info.json"):
     state = load_state()
 
     if chain == "source":
-        frm  = state.get("fuji", 0) + 1
+        head = w3_src.eth.block_number
+        frm = state.get("fuji", head - SAFETY) + 1
+        if head - frm > MAX_RANGE:
+            frm = head - MAX_RANGE  # <-- cap the span
+
+        # frm  = state.get("fuji", 0) + 1
 
         # one filter, one RPC call
         dep_filter = C_src.events.Deposit.create_filter(from_block=frm, to_block="latest")
@@ -115,7 +121,12 @@ def scan_blocks(chain: str, contract_info="contract_info.json"):
         state["fuji"] = w3_src.eth.block_number
 
     else:
-        frm  = state.get("bsc", 0) + 1
+        head = w3_dst.eth.block_number
+        frm = state.get("bsc", head - SAFETY) + 1
+        if head - frm > MAX_RANGE:
+            frm = head - MAX_RANGE
+
+        # frm  = state.get("bsc", 0) + 1
         un_filter = C_dst.events.Unwrap.create_filter(from_block=frm, to_block="latest")
         logs = un_filter.get_all_entries()
 

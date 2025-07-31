@@ -86,9 +86,9 @@ def scan_blocks(chain: str, contract_info="contract_info.json"):
 
     if chain == "source":                                   # ---------- Deposit → wrap
         head = w3_src.eth.block_number
-        frm  = max(state.get("fuji", head - 5) + 1, head - 5)
+        frm  = state.get("fuji", 0) + 1
         # one filter, one RPC call
-        dep_filter = C_src.events.Deposit.create_filter(from_block=frm, to_block=head)
+        dep_filter = C_src.events.Deposit.create_filter(from_block=frm, to_block="latest")
         logs = dep_filter.get_all_entries()
 
         nonce = w3_dst.eth.get_transaction_count(acct.address)
@@ -101,19 +101,19 @@ def scan_blocks(chain: str, contract_info="contract_info.json"):
                 {"from": acct.address,
                  "nonce": nonce,
                  "gas": 300_000,
-                 "gasPrice": w3_dst.to_wei(10, "gwei")}
+                 "gasPrice": w3_dst.to_wei(5, "gwei")}
             )
             tx_hash = w3_dst.eth.send_raw_transaction(
                 acct.sign_transaction(tx).raw_transaction)
             print("   ↳ wrap() tx:", tx_hash.hex())
             nonce += 1
 
-        state["fuji"] = head
+        state["fuji"] = w3_src.eth.block_number
 
     else:                                                      # ---------- Unwrap → withdraw
         head = w3_dst.eth.block_number
-        frm  = max(state.get("bsc", head - 5) + 1, head - 5)
-        un_filter = C_dst.events.Unwrap.create_filter(from_block=frm, to_block=head)
+        frm  = state.get("bsc", 0) + 1
+        un_filter = C_dst.events.Unwrap.create_filter(from_block=frm, to_block="latest")
         logs = un_filter.get_all_entries()
 
         nonce = w3_src.eth.get_transaction_count(acct.address)
@@ -128,13 +128,13 @@ def scan_blocks(chain: str, contract_info="contract_info.json"):
                 {"from": acct.address,
                  "nonce": nonce,
                  "gas": 300_000,
-                 "gasPrice": w3_src.to_wei(25, "gwei")}
+                 "gasPrice": w3_src.to_wei(12, "gwei")}
             )
             tx_hash = w3_src.eth.send_raw_transaction(
                 acct.sign_transaction(tx).raw_transaction)
             print("   ↳ withdraw() tx:", tx_hash.hex())
             nonce += 1
 
-        state["bsc"] = head                                     # advance cursor
+        state["bsc"] = w3_dst.eth.block_number                                     # advance cursor
 
     save_state(state)
